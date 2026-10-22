@@ -13,8 +13,11 @@ permissions:
 
 jobs:
   build:
-    name: Build Android APK
+    name: Build FLAME CLIENT APK
     runs-on: ubuntu-latest
+
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
 
     steps:
       - name: Download source code
@@ -26,39 +29,88 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          cmdline-tools-version: 'latest'
+      - name: Find Android SDK tools
+        shell: bash
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" \
+            -type f -name sdkmanager 2>/dev/null | head -n 1)
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found"
+            exit 1
+          fi
+
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
       - name: Install Android SDK components
+        shell: bash
         run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          yes | "$SDKMANAGER" --licenses || true
+          "$SDKMANAGER" --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Locate Android project
+        shell: bash
+        run: |
+          PROJECT_DIR=""
+
+          if [ -f "settings.gradle" ] || [ -f "settings.gradle.kts" ]; then
+            PROJECT_DIR="$PWD"
+          else
+            while IFS= read -r file; do
+              dir=$(dirname "$file")
+              if [ -d "$dir/app" ]; then
+                PROJECT_DIR="$PWD/$dir"
+                break
+              fi
+            done < <(find . -type f \
+              \( -name settings.gradle -o -name settings.gradle.kts \) \
+              -not -path './.git/*')
+
+            if [ -z "$PROJECT_DIR" ]; then
+              ZIP_FILE=$(find . -maxdepth 2 -type f -name '*.zip' | head -n 1)
+
+              if [ -n "$ZIP_FILE" ]; then
+                mkdir -p extracted
+                unzip -oq "$ZIP_FILE" -d extracted
+
+                while IFS= read -r file; do
+                  dir=$(dirname "$file")
+                  if [ -d "$dir/app" ]; then
+                    PROJECT_DIR="$PWD/$dir"
+                    break
+                  fi
+                done < <(find extracted -type f \
+                  \( -name settings.gradle -o -name settings.gradle.kts \))
+              fi
+            fi
+          fi
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Android project with app/ and settings.gradle not found"
+            find . -maxdepth 3 -type f | head -100
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Android project: $PROJECT_DIR"
 
       - name: Install Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Check Java and Gradle
-        run: |
-          java -version
-          gradle --version
-          echo "ANDROID_HOME=$ANDROID_HOME"
-
-      - name: Check project files
-        run: |
-          ls -la
-          ls -la app
-
-      - name: Build FLAME CLIENT APK
-        run: gradle --no-daemon assembleDebug
+      - name: Build debug APK
+        run: gradle --no-daemon -p "$PROJECT_DIR" assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: FLAME_CLIENT-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: '**/build/outputs/apk/debug/*.apk'
           if-no-files-found: error
           retention-days: 7
