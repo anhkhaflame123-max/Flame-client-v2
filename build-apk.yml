@@ -25,12 +25,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
-      - name: Install Android SDK
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          cmdline-tools-version: 16.0
+          cmdline-tools-version: 'latest'
 
       - name: Install Android SDK components
         run: |
@@ -48,6 +47,11 @@ jobs:
         run: |
           java -version
           gradle --version
+
+      - name: Check project files
+        run: |
+          ls -la
+          ls -la app
 
       - name: Build FLAME CLIENT APK
         run: gradle --no-daemon assembleDebug
